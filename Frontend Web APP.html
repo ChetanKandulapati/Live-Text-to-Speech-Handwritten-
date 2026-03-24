@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vision Reader Web App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-black text-white selection:bg-yellow-400 selection:text-black m-0 p-0 overflow-hidden font-sans">
+
+    <div id="main-container" class="min-h-screen w-full flex flex-col items-center justify-center p-6 text-center cursor-pointer transition-colors duration-500 bg-black text-white" role="button">
+        
+        <div id="icon-container" class="mb-8 pointer-events-none flex justify-center items-center">
+            <i data-lucide="volume-2" class="w-32 h-32 opacity-50"></i>
+        </div>
+
+        <h1 id="status-text" class="text-4xl md:text-5xl font-extrabold tracking-tight mb-8 pointer-events-none">
+            Tap anywhere to start scanning
+        </h1>
+
+        <div id="latest-reading-container" class="hidden mt-8 w-full max-w-2xl bg-white/10 p-6 rounded-3xl backdrop-blur-sm pointer-events-none border border-white/20">
+            <h2 class="text-lg font-bold uppercase tracking-widest opacity-70 mb-2">Latest Reading</h2>
+            <p id="latest-reading-text" class="text-2xl font-medium leading-relaxed"></p>
+        </div>
+        
+        <div id="footer-text" class="absolute bottom-8 text-center opacity-60 font-medium pointer-events-none">
+            Tap anywhere to start
+        </div>
+
+    </div>
+
+    <video id="video" class="hidden" playsinline muted></video>
+    <canvas id="canvas" class="hidden"></canvas>
+
+    <script>
+        lucide.createIcons();
+
+        let isScanning = false;
+        const backendUrl = "http://localhost:5000/process_image";
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const mainContainer = document.getElementById('main-container');
+        const statusText = document.getElementById('status-text');
+        const iconContainer = document.getElementById('icon-container');
+        const readingContainer = document.getElementById('latest-reading-container');
+        const readingText = document.getElementById('latest-reading-text');
+        const footerText = document.getElementById('footer-text');
+
+        function speak(text, interrupt = false) {
+            if (!window.speechSynthesis) return;
+            if (interrupt) window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 1.1;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        async function startScanning() {
+            try {
+                speak("Capturing images.", true);
+                statusText.innerText = "Initializing...";
+                
+                // Reset display for new scan
+                readingContainer.classList.add('hidden');
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: "environment",
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    } 
+                });
+                
+                video.srcObject = stream;
+                await video.play();
+
+                isScanning = true;
+                mainContainer.classList.replace('bg-black', 'bg-yellow-400');
+                mainContainer.classList.replace('text-white', 'text-black');
+                
+                iconContainer.innerHTML = `
+                    <div class="relative">
+                        <i data-lucide="camera" class="w-32 h-32 animate-pulse"></i>
+                        <div class="absolute top-0 right-0 p-3 bg-red-600 rounded-full animate-ping"></div>
+                    </div>
+                `;
+                lucide.createIcons();
+
+                statusText.innerText = "Capturing frames...";
+                footerText.innerText = "Hold steady...";
+
+                await captureAndAnalyze();
+                
+            } catch (err) {
+                console.error("Camera error:", err);
+                statusText.innerText = "Error: Camera access denied.";
+                speak("Error. Camera access was denied.", true);
+                stopScanning();
+            }
+        }
+
+        function stopScanning() {
+            isScanning = false;
+            mainContainer.classList.replace('bg-yellow-400', 'bg-black');
+            mainContainer.classList.replace('text-black', 'text-white');
+            
+            iconContainer.innerHTML = '<i data-lucide="volume-2" class="w-32 h-32 opacity-50"></i>';
+            lucide.createIcons();
+
+            statusText.innerText = "Tap anywhere to start scanning";
+            footerText.innerText = "Tap anywhere to start";
+            
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+        }
+
+        async function captureAndAnalyze() {
+            if (!video.srcObject) return;
+
+            const frames = [];
+            const ctx = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            // Take Frame 1
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            frames.push(canvas.toDataURL('image/jpeg', 0.95));
+
+            // Wait 500ms and take Frame 2
+            await new Promise(resolve => setTimeout(resolve, 500));
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            frames.push(canvas.toDataURL('image/jpeg', 0.95));
+
+            statusText.innerText = "Analyzing text...";
+
+            try {
+                const response = await fetch(backendUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ images: frames })
+                });
+
+                if (!response.ok) throw new Error("Server error");
+                const data = await response.json();
+                
+                // Stop scanning BEFORE updating UI with the result so the state transitions correctly
+                stopScanning();
+
+                if (data.text) {
+                    const cleanText = data.text.trim();
+                    readingContainer.classList.remove('hidden');
+                    readingText.innerText = cleanText;
+                    statusText.innerText = "Scan Complete";
+                    speak(cleanText);
+                } else {
+                    statusText.innerText = "No text found";
+                    speak("No text found.");
+                }
+            } catch (err) {
+                console.error("Communication error:", err);
+                stopScanning();
+                statusText.innerText = "Connection error";
+                speak("Connection error. Check backend.");
+            }
+        }
+
+        mainContainer.addEventListener('click', () => {
+            if (!isScanning) {
+                startScanning();
+            } else {
+                stopScanning();
+            }
+        });
+    </script>
+</body>
+</html>
