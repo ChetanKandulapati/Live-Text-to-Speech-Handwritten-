@@ -8,7 +8,7 @@ from PIL import Image
 app = Flask(__name__)
 CORS(app) 
 
-GEMINI_API_KEY = "AIzaSyCnZDrpo9WNYCBwaIERVVtrSgDfwx15Vo8"
+GEMINI_API_KEY = "PASTE_YOUR_API_KEY"
 MAX_IMAGE_UPLOAD_SIZE = 1080
 
 try:
